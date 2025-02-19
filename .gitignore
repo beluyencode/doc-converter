@@ -1,2 +1,6 @@
 .gitattributes
 /venv
+/node_modules
+/pdf
+/public
+/uploads

@@ -1,31 +1,18 @@
-from PyPDF2 import PdfReader
-from PyPDF2 import PdfWriter
-from docx import Document
-from docx.shared import Inches
+from pdf2docx import Converter
 
-# Create a new Word document
-document = Document()
-
-# Open a PDF file
-with open("test.pdf", "rb") as file:
+def pdf_to_word(pdf_file):
+    # Đổi tên file DOCX từ tên file PDF
+    docx_filename = pdf_file.name.replace('.pdf', '.docx')
     
-    # Create a PdfReader object
-    pdf_reader = PdfReader(file)
+    # Chuyển đổi PDF sang DOCX
+    cv = Converter(pdf_file.name)
+    cv.convert(docx_filename, multi_processing=True, start=0, end=None)  # multi_processing=True để tăng tốc quá trình
+    cv.close()
+    
+    return docx_filename
 
-    # Open the Word document for writing
-    with open("output.docx", "wb") as output_file:
+# Ví dụ sử dụng
+pdf_file_path = 'test.pdf'  # Thay thế bằng đường dẫn file PDF của bạn
+output_docx = pdf_to_word(open(pdf_file_path, 'rb'))
 
-        # Loop through each page of the PDF file
-        for page_num in range(len(pdf_reader.pages)):
-            
-            # Get the current page
-            page = pdf_reader.pages[page_num]
-
-            # Extract text from the page
-            text = page.extract_text()
-            
-            # Add a paragraph in Word to hold the text
-            document.add_paragraph(text)
-
-# Save the Word document
-document.save("output.docx")
+print(f"File DOCX đã được tạo: {output_docx}")
