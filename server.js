@@ -60,9 +60,13 @@ async function modifyDocxDirectly(filePath, segments) {
             fullText += textNodes[i].textContent;
         }
 
+        console.log(textElements);
+        
         // Duyệt qua từng đoạn cần bôi vàng
+        let searchStartIndex = 0; // Start searching from the beginning initially
+
         segments.forEach(({ segment }) => {
-            let startIndex = fullText.indexOf(segment);
+            let startIndex = fullText.indexOf(segment, searchStartIndex);
             if (startIndex !== -1) {
                 console.log(`🔍 Tìm thấy "${segment}" tại vị trí ${startIndex}`);
 
@@ -88,6 +92,11 @@ async function modifyDocxDirectly(filePath, segments) {
 
                     currentIndex += text.length;
                 }
+
+                // Update the search start index to the end of the current segment
+                searchStartIndex = startIndex + segment.length;
+            } else {
+                console.log("❌ Các đoạn sau không tìm thấy trong tài liệu: \"", segment + "\"");
             }
         });
 
@@ -122,6 +131,24 @@ async function extractTextFromPDF(pdfPath) {
         return data.text;
     } catch (error) {
         console.error("Lỗi khi đọc PDF:", error);
+    }
+}
+
+async function extractTextFromDocx(docxPath) {
+    try {
+        const data = fs.readFileSync(docxPath);
+        const zip = await JSZip.loadAsync(data);
+        const contentXml = await zip.file("word/document.xml").async("text");
+        const parser = new DOMParser();
+        const xmlDoc = parser.parseFromString(contentXml, "text/xml");
+        const textNodes = xmlDoc.getElementsByTagName("w:t");
+        let text = "";
+        for (let i = 0; i < textNodes.length; i++) {
+            text += textNodes[i].textContent + " ";
+        }
+        return text;
+    } catch (error) {
+        console.error("Lỗi khi đọc DOCX:", error);
     }
 }
 
@@ -203,31 +230,35 @@ app.post('/convert', upload.fields([{ name: 'fileOrigin', maxCount: 1 }, { name:
     fs.renameSync(req.files.fileTranslation[0].path, fileTranslationNewPath);
     req.files.fileTranslation[0].path = fileTranslationNewPath;
     
-    const fileOriginPath = req.files.fileOrigin[0].path;
-
-    const originText = await extractTextFromPDF(fileOriginPath);
-    const translationText = await extractTextFromPDF(fileTranslationNewPath);
+    const fileOriginPath = path.join(pdfDir, req.files.fileOrigin[0].filename) + ".pdf";
+    fs.renameSync(req.files.fileOrigin[0].path, fileOriginPath);
+    req.files.fileOrigin[0].path = fileOriginPath;
 
     const name = guidGenerator();
-
+    const pathOrigin = path.join(__dirname, 'public') + '/' + name + '_origin.docx';
+    const pathTranslation = path.join(__dirname, 'public') + '/' + name + '_translation.docx';
     await PDFNet.runWithCleanup(async () => {
-        
         await PDFNet.addResourceSearchPath('./Lib/');
             // check if the module is available
             if (!(await PDFNet.StructuredOutputModule.isModuleAvailable())) {
                 return;
             }
-            await PDFNet.Convert.fileToWord(fileTranslationNewPath, path.join(__dirname, 'public') + '/' + name + '.docx');
+         
+            await PDFNet.Convert.fileToWord(fileTranslationNewPath, pathTranslation);
+            await PDFNet.Convert.fileToWord(fileOriginPath, pathOrigin);
         }, 'demo:1739949060645:617adfb903000000000935bcbf740717e9c6b2c11e6fd7ac9496321dc6')
             .catch(err => {
                 console.error(err);
             })
-            .then(async function () {
+            .then(async () => {
                 PDFNet.shutdown();
+                
+                const originText = await extractTextFromDocx(pathOrigin);
+                const translationText = await extractTextFromDocx(pathTranslation);
                 const segments = findAddedText(originText, translationText);
                 
-                await modifyDocxDirectly(path.join(__dirname, 'public') + '/' + name + '.docx', segments);
-                res.json({ message: 'File converted successfully', path: `${name}.docx`, changed: segments });
+                await modifyDocxDirectly(pathTranslation, segments);
+                res.json({ message: 'File converted successfully', path: `${name}_translation.docx`, changed: segments });
             });
 });
 
