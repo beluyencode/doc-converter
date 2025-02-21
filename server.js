@@ -79,7 +79,11 @@ async function modifyDocxDirectly(newPath, segments) {
 
                     currentIndex += text.length;
                 }
-
+                searchStartIndex = endIndex;
+                if (original === translated) {
+                    console.log(`❌ Không cần thay thế "${original}" vì dịch không khác gì.`);
+                    return;
+                }
                 if (lastNode) {
                     let parentRun = lastNode.parentNode;
 
@@ -99,7 +103,6 @@ async function modifyDocxDirectly(newPath, segments) {
                     parentRun.parentNode.insertBefore(newRunNode, parentRun.nextSibling);
                 }
 
-                searchStartIndex = endIndex;
             } else {
                 console.log(`❌ Không tìm thấy "${segment}" trong tài liệu.`);
             }
@@ -158,17 +161,13 @@ async function extractTextFromDocx(docxPath) {
     }
 }
 
-function removeSegmentNotTranslated(segments, marianData) {
-    const data = [];
-    for (let i = 0; i < segments.length; i++) {
-        if (marianData[i] !== segments[i]) {
-            data.push({
-                original: segments[i],
-                translated: marianData[i],
-            });
-        }
-    }
-    return data;
+function mergeSegmentTranslate(segments, marianData) {
+    return segments.map((segment, index) => {
+        return {
+            original: segment,
+            translated: marianData[index],
+        };
+    });
 }
 
 function findAddedAndReplacedText(originalText, newText) {
@@ -262,7 +261,7 @@ app.post('/convert', upload.fields([{ name: 'fileOrigin', maxCount: 1 }, { name:
             const translationText = await extractTextFromDocx(pathTranslation);
             const segments = findAddedAndReplacedText(originText, translationText);
             const marianData = await translateTexts(segments);
-            const segmentsTranslate = removeSegmentNotTranslated(segments, marianData.translation);
+            const segmentsTranslate = mergeSegmentTranslate(segments, marianData.translation);
             console.log("segments:", segments);
 
             console.log("marianData:", marianData);
