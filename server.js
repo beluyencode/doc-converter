@@ -9,6 +9,7 @@ const port = 3000;
 const JSZip = require("jszip");
 const { DOMParser, XMLSerializer } = require("xmldom");
 const jsDiff = require('diff');
+var mammoth = require("mammoth");
 
 // const mammoth = require("mammoth");
 
@@ -85,13 +86,17 @@ async function modifyDocxDirectly(newPath, segments) {
                     return;
                 }
                 if (lastNode) {
+                    // Lấy node cha
                     let parentRun = lastNode.parentNode;
 
-                    // Thêm văn bản marianData[index] sau đoạn gốc
+                    // Tạo thẻ <w:t> chứa văn bản mới
                     let newTextNode = xmlDoc.createElement("w:t");
                     newTextNode.textContent = " / " + translated;
 
+                    // Tạo thẻ <w:r> để bọc <w:t>
                     let newRunNode = xmlDoc.createElement("w:r");
+
+                    // Thêm thuộc tính màu chữ (đỏ)
                     let newRunProperties = xmlDoc.createElement("w:rPr");
                     let colorNode = xmlDoc.createElement("w:color");
                     colorNode.setAttribute("w:val", "FF0000"); // Màu đỏ
@@ -100,7 +105,14 @@ async function modifyDocxDirectly(newPath, segments) {
                     newRunNode.appendChild(newRunProperties);
                     newRunNode.appendChild(newTextNode);
 
-                    parentRun.parentNode.insertBefore(newRunNode, parentRun.nextSibling);
+                    // 👉 Tạo thẻ <w:ins> để đánh dấu là Track Changes
+                    let trackChangeNode = xmlDoc.createElement("w:ins");
+                    trackChangeNode.setAttribute("w:author", "YourName");
+                    trackChangeNode.setAttribute("w:date", new Date().toISOString()); // Ngày hiện tại
+                    trackChangeNode.appendChild(newRunNode);
+
+                    // Chèn nội dung đã chỉnh sửa sau nội dung gốc
+                    parentRun.parentNode.insertBefore(trackChangeNode, parentRun.nextSibling);
                 }
 
             } else {
@@ -172,6 +184,7 @@ function mergeSegmentTranslate(segments, marianData) {
 
 function findAddedAndReplacedText(originalText, newText) {
     const diffResult = jsDiff.diffWords(originalText, newText);
+    console.log(diffResult);
 
     const data = [];
 
@@ -218,80 +231,98 @@ async function translateTexts(listText) {
     return data;
 }
 
+function removeDuplicatePrefix(text) {
+    console.log(text);
+
+    // Biểu thức chính quy để tìm đoạn lặp
+    const pattern = /(Discharge Summaries[\s\S]*?Verified Date:\s*\d{2} \w{3} \d{4} \d{2}:\d{2}:\d{2})/g;
+
+    // Tìm tất cả các lần xuất hiện của đoạn văn bản trùng lặp
+    const matches = text.match(pattern);
+
+    if (matches && matches.length > 1) {
+        // Giữ lại lần đầu tiên, xóa tất cả các lần sau
+        let firstMatch = matches[0];
+        return text.replace(pattern, (match, offset) => (offset === text.indexOf(firstMatch) ? match : ""));
+    }
+
+    return text;
+}
+
 // ---------------------------------------------------
 
 // API to handle PDF upload
 app.post('/convert', upload.fields([{ name: 'fileOrigin', maxCount: 1 }, { name: 'fileTranslation', maxCount: 1 }]), async (req, res) => {
-    if (!req.files) {
-        return res.status(400).send('No file uploaded.');
-    }
-    const pdfDir = path.join(__dirname, 'pdf');
-    if (!fs.existsSync(pdfDir)) {
-        fs.mkdirSync(pdfDir);
-    }
-
-    const fileTranslationNewPath = path.join(pdfDir, req.files.fileTranslation[0].filename) + ".pdf";
-    fs.renameSync(req.files.fileTranslation[0].path, fileTranslationNewPath);
-    req.files.fileTranslation[0].path = fileTranslationNewPath;
-
-    const fileOriginPath = path.join(pdfDir, req.files.fileOrigin[0].filename) + ".pdf";
-    fs.renameSync(req.files.fileOrigin[0].path, fileOriginPath);
-    req.files.fileOrigin[0].path = fileOriginPath;
-
-    const name = guidGenerator();
-    const pathOrigin = path.join(__dirname, 'public') + '/' + name + '_origin.docx';
-    const pathTranslation = path.join(__dirname, 'public') + '/' + name + '_translation.docx';
-    await PDFNet.runWithCleanup(async () => {
-        await PDFNet.addResourceSearchPath('./Lib/');
-        // check if the module is available
-        if (!(await PDFNet.StructuredOutputModule.isModuleAvailable())) {
-            return;
+    try {
+        if (!req.files) {
+            return res.status(400).send('No file uploaded.');
+        }
+        const pdfDir = path.join(__dirname, 'pdf');
+        if (!fs.existsSync(pdfDir)) {
+            fs.mkdirSync(pdfDir);
         }
 
-        await PDFNet.Convert.fileToWord(fileTranslationNewPath, pathTranslation);
-        await PDFNet.Convert.fileToWord(fileOriginPath, pathOrigin);
-    }, 'demo:1739949060645:617adfb903000000000935bcbf740717e9c6b2c11e6fd7ac9496321dc6')
-        .catch(err => {
-            console.error(err);
-        })
-        .then(async () => {
-            PDFNet.shutdown();
+        const fileTranslationNewPath = path.join(pdfDir, req.files.fileTranslation[0].filename) + ".pdf";
+        fs.renameSync(req.files.fileTranslation[0].path, fileTranslationNewPath);
+        req.files.fileTranslation[0].path = fileTranslationNewPath;
 
-            const originText = await extractTextFromDocx(pathOrigin);
-            const translationText = await extractTextFromDocx(pathTranslation);
-            const segments = findAddedAndReplacedText(originText, translationText);
-            const marianData = await translateTexts(segments);
-            const segmentsTranslate = mergeSegmentTranslate(segments, marianData.translation);
-            console.log("segments:", segments);
+        const fileOriginPath = path.join(pdfDir, req.files.fileOrigin[0].filename) + ".pdf";
+        fs.renameSync(req.files.fileOrigin[0].path, fileOriginPath);
+        req.files.fileOrigin[0].path = fileOriginPath;
 
-            console.log("marianData:", marianData);
+        const name = guidGenerator();
+        const pathOrigin = path.join(__dirname, 'public') + '/' + name + '_origin.docx';
+        const pathTranslation = path.join(__dirname, 'public') + '/' + name + '_translation.docx';
+        await PDFNet.runWithCleanup(async () => {
+            await PDFNet.addResourceSearchPath('./Lib/');
+            // check if the module is available
+            if (!(await PDFNet.StructuredOutputModule.isModuleAvailable())) {
+                return;
+            }
 
-            console.log("segmentsTranslate:", segmentsTranslate);
-            await modifyDocxDirectly(pathTranslation, segmentsTranslate);
-            res.json({ message: 'File converted successfully', path: `${name}_translation.docx`, changed: segments });
-        });
+            await PDFNet.Convert.fileToWord(fileTranslationNewPath, pathTranslation);
+            await PDFNet.Convert.fileToWord(fileOriginPath, pathOrigin);
+        }, 'demo:1739949060645:617adfb903000000000935bcbf740717e9c6b2c11e6fd7ac9496321dc6')
+
+        const originText = await extractTextFromDocx(pathOrigin);
+        const translationText = await extractTextFromDocx(pathTranslation);
+
+        const segments = findAddedAndReplacedText(
+            removeDuplicatePrefix(originText),
+            removeDuplicatePrefix(translationText)
+        );
+        const marianData = await translateTexts(segments);
+        const segmentsTranslate = mergeSegmentTranslate(segments, marianData.translation);
+
+        await modifyDocxDirectly(pathTranslation, segmentsTranslate);
+        res.json({ message: 'File converted successfully', path: `${name}_translation.docx`, changed: segments });
+    } catch (error) {
+        console.error("Error converting PDF to DOCX:", error);
+        res.status(500).send('Error converting PDF to DOCX.');
+    }
 });
 
-// API to convert DOCX to HTML
-// app.post('/convert-docx-to-html', upload.single('file'), async (req, res) => {
-//     if (!req.file) {
-//         return res.status(400).send('No file uploaded.');
-//     }
+app.post('/convert-docx-to-xml', upload.single('file'), async (req, res) => {
+    if (!req.file) {
+        return res.status(400).send('No file uploaded.');
+    }
 
-//     const docxFilePath = req.file.path;
+    const docxPath = req.file.path;
+    try {
+        const data = fs.readFileSync(docxPath);
+        const zip = await JSZip.loadAsync(data);
+        const contentXml = await zip.file("word/document.xml").async("text");
 
-//     try {
-//         const result = await mammoth.convertToHtml({ path: docxFilePath });
-//         res.send(result.value); // The generated HTML
-//     } catch (error) {
-//         console.error("Error converting DOCX to HTML:", error);
-//         res.status(500).send('Error converting DOCX to HTML.');
-//     } finally {
-//         // Clean up the uploaded file
-//         fs.unlinkSync(docxFilePath);
-//     }
-// });
+        const xmlFilePath = path.join(__dirname, 'public', `${req.file.filename}.xml`);
+        fs.writeFileSync(xmlFilePath, contentXml);
 
-app.listen(port, () => {
+        res.json({ message: 'File converted to XML successfully', path: `${req.file.filename}.xml` });
+    } catch (error) {
+        console.error("Error converting DOCX to XML:", error);
+        res.status(500).send('Error converting DOCX to XML.');
+    }
+});
+
+app.listen(port, "0.0.0.0", () => {
     console.log(`Server is running on port ${port}`);
 });
